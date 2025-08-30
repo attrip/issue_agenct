@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Issue Resolver Agent Kit v1.3（6エージェント + 三階層イシューツリー + 安全コピー）</title>
+<style>
+  :root{--bg:#0b0f14;--card:#141a22;--ink:#e8eef6;--muted:#9fb0c8;--acc:#5eead4;--bad:#f87171;--bd:#1f2a37;--ok:#86efac}
+  *{box-sizing:border-box}
+  body{margin:0;background:linear-gradient(180deg,#0b0f14,#0e141b);color:var(--ink);font:14px/1.6 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:980px;margin:24px auto;padding:16px}
+  h1{font-size:20px;margin:0 0 8px}
+  .sub{color:var(--muted);margin:0 0 16px}
+  .grid{display:grid;grid-template-columns:1.2fr .8fr;gap:16px}
+  .card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:14px}
+  .tabs{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 10px}
+  .tab{padding:8px 10px;border-radius:999px;border:1px solid var(--bd);background:#0f1520;color:var(--ink);cursor:pointer;font-size:12px}
+  .tab.active{background:var(--acc);color:#001a16;border-color:transparent}
+  .hide{display:none}
+  label{display:block;font-weight:600;margin:6px 0 4px}
+  input,textarea,select{width:100%;background:#0e131a;color:var(--ink);border:1px solid var(--bd);border-radius:10px;padding:8px}
+  textarea{min-height:90px;resize:vertical}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .btn{display:inline-flex;align-items:center;gap:6px;padding:8px 10px;border-radius:10px;border:1px solid var(--bd);background:#0f1520;color:var(--ink);cursor:pointer}
+  .btn.prim{background:var(--acc);color:#00241d;border-color:transparent;font-weight:700}
+  .btn.warn{background:#2a1111;border-color:#3a1515;color:#ffbdbd}
+  .btn.ok{background:#103014;border-color:#1b4d23;color:#b7f7c2}
+  .muted{color:var(--muted);font-size:12px}
+  .list{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+  .chip{background:#0e1620;border:1px solid var(--bd);padding:4px 8px;border-radius:999px;font-size:12px}
+  .tree{font-family:ui-monospace,monospace;font-size:13px;background:#0a0f15;border:1px solid var(--bd);border-radius:12px;padding:10px;height:220px;overflow:auto}
+  .footer{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+  .toast{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);background:#0f1520;color:var(--ink);border:1px solid var(--bd);border-radius:999px;padding:8px 12px;font-size:12px;opacity:0;pointer-events:none;transition:opacity .2s}
+  .toast.show{opacity:1}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>今すぐイシューを解決するためのAIエージェント（6分割）<span class="muted"> v1.3</span></h1>
+  <p class="sub">6エージェントのプロンプト生成は維持しつつ、イシューツリーを<b>3階層</b>まで編集可能に。コピーは権限制限でもフォールバック。</p>
+
+  <div class="grid">
+    <!-- Left: Agents -->
+    <section class="card">
+      <div class="tabs" id="tabs"></div>
+      <div id="panes"></div>
+    </section>
+
+    <!-- Right: Output & Tools -->
+    <aside class="card">
+      <h3 style="margin:0 0 6px">出力 / プロンプト</h3>
+      <div class="list" id="hints"></div>
+      <label>生成結果</label>
+      <textarea id="out" placeholder="ここに各エージェントの生成物が出ます"></textarea>
+      <div class="footer">
+        <button class="btn prim" id="copy">コピー</button>
+        <button class="btn" id="select">選択のみ</button>
+        <button class="btn" id="downloadTxt">.txt出力</button>
+        <button class="btn" id="buildAll">6ステップ一括プロンプト作成</button>
+        <button class="btn" id="save">保存</button>
+        <button class="btn" id="load">読込</button>
+        <button class="btn" id="download">JSON出力</button>
+        <button class="btn warn" id="reset">初期化</button>
+      </div>
+      <p class="muted">ヒント: <span class="kbd">⌘/Ctrl + V</span> でChatGPTに貼付→回答をこのツールの入力へ戻して精度を上げる。</p>
+    </aside>
+  </div>
+
+  <!-- 3階層イシューツリー -->
+  <section class="card" style="margin-top:12px">
+    <h3 style="margin:0 0 6px">イシューツリー（3段階エディタ & 半自動）</h3>
+    <p class="muted">L1=サブイシュー / L2=観点・要因 / L3=検証タスク。最低3層まで落とす。</p>
+    <div class="row">
+      <div>
+        <label>大イシュー</label>
+        <input id="rootIssue" placeholder="例：SNS広告とオフラインイベント、どちらに投資すべきか？" />
+        <label>L1サブイシュー（改行区切り）</label>
+        <textarea id="subIssues" placeholder="例：市場規模の比較\nCPAの比較\nLTVへの波及\n実行リソース・リスク"></textarea>
+        <div class="footer">
+          <button class="btn" id="mkTree">L1→ツリー起票</button>
+          <button class="btn" id="insertL2Template">雛形L2（定義/測定/比較/リスク）</button>
+          <button class="btn" id="insertL3Template">雛形L3（仮説/検証/条件）</button>
+          <button class="btn" id="mkMECE">MECEチェック用プロンプト</button>
+        </div>
+      </div>
+      <div>
+        <div class="tree" id="tree" aria-live="polite"></div>
+        <div class="footer">
+          <button class="btn" id="toText">ツリー→テキスト</button>
+          <button class="btn" id="fromText">テキスト→ツリー</button>
+          <button class="btn warn" id="clearTree">ツリー初期化</button>
+        </div>
+        <label>ツリーのテキスト表現（番号式 1 / 1.1 / 1.1.1）</label>
+        <textarea id="treeText" placeholder="例：\n0. 大イシュー\n1. L1サブイシューA\n1.1 L2観点A-1\n1.1.1 L3タスクA-1-1\n2. L1サブイシューB ..."></textarea>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" style="margin-top:12px">
+    <h3 style="margin:0 0 6px">診断 / テスト</h3>
+    <div class="footer">
+      <button class="btn ok" id="runTests">テストを実行</button>
+      <span class="muted">（自動コピーは環境によりスキップ）</span>
+    </div>
+    <div id="testResults" class="tree" aria-live="polite"></div>
+  </section>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+const el = (tag,attrs={})=>Object.assign(document.createElement(tag),attrs);
+const state = JSON.parse(localStorage.getItem('issueAgentV1')||'{}');
+function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),1600); }
+
+// ---- Agent Definitions (6) ----
+const AGENTS = [
+  {key:'a1', name:'① 目的/目指す姿', qs:[
+    ['目的（なぜやる？）','今なぜ取り組むべきか、放置リスクは？'],
+    ['目指す姿（成功状態）','具体数値/KGI（例：前年比+50% など）'],
+    ['制約・前提','予算、期限（XXXまでにXXXXする）'],
+    ['ステークホルダー','誰が意思決定者／誰に影響？']
+  ], build: v => `【目的/目指す姿の明確化】\n目的: ${v[0]}\n目指す姿(KGI): ${v[1]}\n制約/前提: ${v[2]}\n関係者: ${v[3]}\n---\nあなたは経営コーチです。上記を踏まえ、\n・目的とKGIの整合性チェック\n・KPI候補（3つ）\n・見落としがちな前提リスク（3つ）\nを短く指摘してください。`},
+  {key:'a2', name:'② イシュー特定', qs:[
+    ['現状の仮説イシュー','成果に直結する問いを1文で'],
+    ['インパクト','解けた時のビジネス効果は？'],
+    ['可解性','データと期間で本当に答えが出せる？'],
+    ['緊急度','なぜ今？優先度の根拠は？']
+  ], build: v => `【イシュー特定レビュー】\n仮説イシュー: ${v[0]}\nインパクト: ${v[1]}\n可解性: ${v[2]}\n緊急度: ${v[3]}\n---\nあなたは戦略ファシリ。上記が「本質的な問い」かを、\n・代替イシュー案（2つ）\n・やめる選択肢\n・先送り条件\nで提案して。`},
+  {key:'a3', name:'③ イシューステートメント', qs:[
+    ['目的リマインド','例：新規顧客を前年比+50%に'],
+    ['選択肢 or 主要要因','比較対象や候補（2〜3）'],
+    ['成果指標','最大化したい指標（KGI/KPI）']
+  ], build: v => `【イシューステートメント化】\nフォーマット:「${v[0]} を達成するために、${v[1]} のうちどれに資源を集中すべきか？（評価軸: ${v[2]}）」\n---\nあなたは意思決定者に突きつける編集者。\n・曖昧語の除去\n・評価軸の最小十分集合\n・意思決定に足る比較条件\nを補正して。`},
+  {key:'a4', name:'④ サブイシュー展開', qs:[
+    ['分解の起点','要素分解の視点（市場/コスト/LTV/リスク等）'],
+    ['初期サブイシュー','改行区切りで列挙（MECE意識）']
+  ], build: v => `【サブイシュー展開】\n分解視点: ${v[0]}\n候補:\n${v[1]}\n---\nあなたはロジック監査人。\n・ダブり/漏れの指摘\n・優先度（Impact×Feasibility)上位3\n・検証順序\nを簡潔に出して。`},
+  {key:'a5', name:'⑤ 分析・判断', qs:[
+    ['必要データ','最小限のデータ項目（改行区切り）'],
+    ['現状のファクト','判明している数値や事実'],
+    ['インサイト仮説','事実→解釈→含意（1〜2行で）']
+  ], build: v => `【分析・判断の設計】\n必要データ:\n${v[0]}\n既知のファクト: ${v[1]}\nインサイト仮説: ${v[2]}\n---\nあなたは意思決定アナリスト。\n・検証手順（3ステップ）\n・落とし穴（2つ）\n・意思決定に必要な追加データ\nを提示して。`},
+  {key:'a6', name:'⑥ 結論版へ書換', qs:[
+    ['暫定結論','◯◯すべきだ'],
+    ['根拠要約','主要根拠を1〜3行'],
+    ['例外条件','◯◯の場合は××']
+  ], build: v => `【結論版ドラフト】\n結論: ${v[0]}\n根拠: ${v[1]}\n条件: ${v[2]}\n---\nあなたはエグゼクサマリー編集者。\n・30秒版/3行版/箇条書き版\n・Next Action（72時間以内）\nを作って。`}
+];
+
+const tabs = $('#tabs');
+const panes = $('#panes');
+const hints = $('#hints');
+
+function renderAgents(){
+  tabs.innerHTML=''; panes.innerHTML='';
+  AGENTS.forEach((a,i)=>{
+    const t = el('button',{className:'tab'+(i===0?' active':''),textContent:a.name});
+    t.addEventListener('click',()=>setTab(i));
+    tabs.appendChild(t);
+
+    const p = el('div',{className:i===0?'':'hide'});
+    p.innerHTML = `<div class="row">${a.qs.map((q,qi)=>`
+      <div>
+        <label>${q[0]}</label>
+        <textarea data-k="${a.key}" data-i="${qi}" placeholder="${q[1]}">${(state[a.key]?.[qi]||'')}</textarea>
+      </div>`).join('')}</div>
+      <div class="footer">
+        <button class="btn prim" data-build="${a.key}">プロンプト生成</button>
+        <button class="btn" data-memo="${a.key}">メモ保存</button>
+      </div>`;
+    panes.appendChild(p);
+  });
+
+  panes.addEventListener('input',ev=>{
+    const ta = ev.target.closest('textarea');
+    if(!ta) return; const k=ta.dataset.k, i=+ta.dataset.i;
+    state[k]=state[k]||[]; state[k][i]=ta.value; persist();
+  });
+
+  panes.addEventListener('click',ev=>{
+    const b = ev.target.closest('button'); if(!b) return;
+    if(b.dataset.build){
+      const a = AGENTS.find(x=>x.key===b.dataset.build);
+      const vals = (state[a.key]||[]).map(x=>x||'');
+      $('#out').value = a.build(vals);
+    }
+    if(b.dataset.memo){ toast('現在の入力を保存しました。'); }
+  });
+
+  // hints
+  hints.innerHTML='';
+  ['曖昧語を削る','数値と期限を入れる','先に「やらない」を決める','Impact×Feasibilityで順序付け','ファクトと解釈を分ける','30秒で言えるか？'].forEach(s=>{
+    hints.appendChild(el('span',{className:'chip',textContent:s}))
+  });
+}
+function setTab(i){
+  [...tabs.children].forEach((t,idx)=>t.classList.toggle('active',idx===i));
+  [...panes.children].forEach((p,idx)=>p.classList.toggle('hide',idx!==i));
+}
+function persist(){ localStorage.setItem('issueAgentV1', JSON.stringify(state)); }
+
+// --- Safe Copy Utilities ---
+async function copyViaClipboard(text){ if(!navigator.clipboard) throw new Error('no-clipboard'); await navigator.clipboard.writeText(text); }
+function copyViaExec(text){ const ta=document.createElement('textarea'); ta.value=text; ta.setAttribute('readonly',''); ta.style.position='fixed'; ta.style.top='-1000px'; document.body.appendChild(ta); ta.select(); const ok=document.execCommand&&document.execCommand('copy'); document.body.removeChild(ta); if(!ok) throw new Error('exec-failed'); }
+async function safeCopy(text){ try{ await copyViaClipboard(text); toast('コピーしました'); }catch(e){ try{ copyViaExec(text); toast('コピー（フォールバック）成功'); }catch(e2){ const out=$('#out'); out.focus(); out.select(); toast('自動コピー不可。⌘/Ctrl+Cでコピー'); } } }
+
+// Right panel actions
+$('#copy').onclick=()=>{ safeCopy($('#out').value||''); };
+$('#select').onclick=()=>{ const out=$('#out'); out.focus(); out.select(); toast('選択しました。⌘/Ctrl+Cでコピー'); };
+$('#downloadTxt').onclick=()=>{ const blob = new Blob([$('#out').value||''],{type:'text/plain'}); const a=el('a',{href:URL.createObjectURL(blob),download:'issue-output.txt'}); a.click(); URL.revokeObjectURL(a.href); };
+$('#buildAll').onclick=()=>{ const blocks = AGENTS.map(a=>`### ${a.name}\n`+a.build((state[a.key]||[]).map(x=>x||''))).join('\n\n'); $('#out').value = `【Issue Resolver 6連プロンプト】\n`+blocks; };
+$('#save').onclick=()=>{ persist(); toast('ローカルに保存しました（自動保存も有効）'); };
+$('#load').onclick=()=>{ const s = localStorage.getItem('issueAgentV1'); if(!s) return toast('保存データなし'); Object.assign(state, JSON.parse(s)); renderAgents(); toast('読込完了'); };
+$('#download').onclick=()=>{ const blob = new Blob([JSON.stringify(state,null,2)],{type:'application/json'}); const a=el('a',{href:URL.createObjectURL(blob),download:'issue-agent-v1.json'}); a.click(); URL.revokeObjectURL(a.href); };
+$('#reset').onclick=()=>{ if(confirm('全消去しますか？')){ localStorage.removeItem('issueAgentV1'); location.reload(); } };
+
+// ====== 3階層ツリー: データ構造 ======
+// state.tree = {root: string, nodes:[{title, children:[{title, children:[{title}]}]}]}
+function ensureTree(){ if(!state.tree){ state.tree={root:'', nodes:[]}; } if(!state.tree.nodes) state.tree.nodes=[]; }
+function renderTree(){ ensureTree(); $('#rootIssue').value=state.tree.root||''; const wrap=document.createElement('div'); state.tree.nodes.forEach((n,i)=>{ const l1=document.createElement('div'); l1.style.marginBottom='6px'; l1.innerHTML=`<div><b>[${i+1}]</b> <input data-level="1" data-i="${i}" value="${esc(n.title)}" style="width:80%"></div>`; const l2wrap=document.createElement('div'); l2wrap.style.margin='6px 0 0 18px'; n.children=n.children||[]; n.children.forEach((c,j)=>{ const l2=document.createElement('div'); l2.style.marginBottom='4px'; l2.innerHTML=`<div><span>${i+1}.${j+1}</span> <input data-level="2" data-i="${i}" data-j="${j}" value="${esc(c.title)}" style="width:70%"> <button class="btn" data-addl3="${i}:${j}">+L3</button> <button class="btn warn" data-dell2="${i}:${j}">削除</button></div>`; const l3wrap=document.createElement('div'); l3wrap.style.margin='4px 0 0 18px'; c.children=c.children||[]; c.children.forEach((g,k)=>{ const l3=document.createElement('div'); l3.innerHTML=`<span>${i+1}.${j+1}.${k+1}</span> <input data-level="3" data-i="${i}" data-j="${j}" data-k="${k}" value="${esc(g.title)}" style="width:65%"> <button class="btn warn" data-dell3="${i}:${j}:${k}">削除</button>`; l3wrap.appendChild(l3); }); const addL3Btn=document.createElement('button'); addL3Btn.className='btn'; addL3Btn.textContent='+L3'; addL3Btn.onclick=()=>addL3(i,j,''); const addL3Box=document.createElement('div'); addL3Box.style.marginTop='4px'; addL3Box.appendChild(addL3Btn); l2wrap.appendChild(l2); l2wrap.appendChild(l3wrap); l2wrap.appendChild(addL3Box); }); const addL2Btn=document.createElement('button'); addL2Btn.className='btn'; addL2Btn.textContent='+L2'; addL2Btn.onclick=()=>addL2(i,''); l1.appendChild(l2wrap); l1.appendChild(addL2Btn); wrap.appendChild(l1); }); $('#tree').innerHTML=''; $('#tree').appendChild(wrap); }
+function esc(s){return (s||'').replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m]));}
+function addL1(title=''){ ensureTree(); state.tree.nodes.push({title, children:[]}); persist(); renderTree(); }
+function addL2(i,title=''){ ensureTree(); state.tree.nodes[i].children.push({title, children:[]}); persist(); renderTree(); }
+function addL3(i,j,title=''){ ensureTree(); state.tree.nodes[i].children[j].children.push({title}); persist(); renderTree(); }
+$('#tree').addEventListener('input', e=>{ const inp=e.target.closest('input'); if(!inp) return; const lvl=+inp.dataset.level; const i=+inp.dataset.i; const j=+inp.dataset.j; const k=+inp.dataset.k; if(lvl===1){ state.tree.nodes[i].title=inp.value; } if(lvl===2){ state.tree.nodes[i].children[j].title=inp.value; } if(lvl===3){ state.tree.nodes[i].children[j].children[k].title=inp.value; } persist(); });
+$('#tree').addEventListener('click', e=>{ const b=e.target.closest('button'); if(!b) return; if(b.dataset.addl3){ const [i,j]=b.dataset.addl3.split(':').map(Number); addL3(i,j,''); } if(b.dataset.dell2){ const [i,j]=b.dataset.dell2.split(':').map(Number); state.tree.nodes[i].children.splice(j,1); persist(); renderTree(); } if(b.dataset.dell3){ const [i,j,k]=b.dataset.dell3.split(':').map(Number); state.tree.nodes[i].children[j].children.splice(k,1); persist(); renderTree(); } });
+
+// L1→ツリー起票
+$('#mkTree').onclick=()=>{ const root=$('#rootIssue').value.trim(); const subs=$('#subIssues').value.split(/\n+/).map(s=>s.trim()).filter(Boolean); if(!root){ return toast('大イシューを入力'); } state.tree={root, nodes:subs.map(s=>({title:s, children:[]}))}; persist(); renderTree(); toast('L1を起票しました'); };
+$('#clearTree').onclick=()=>{ state.tree={root:$('#rootIssue').value.trim(), nodes:[]}; persist(); renderTree(); };
+
+// 雛形：L2/L3
+$('#insertL2Template').onclick=()=>{ ensureTree(); const L2T=['定義/スコープ','測定/データ取得','比較/評価軸','リスク/実行性']; state.tree.nodes.forEach(n=>{ if(!n.children||!n.children.length){ n.children=L2T.map(t=>({title:t, children:[]})); }}); persist(); renderTree(); toast('L2雛形を挿入'); };
+$('#insertL3Template').onclick=()=>{ ensureTree(); const L3T=['仮説→指標','データ収集→検証','意思決定→条件分岐']; state.tree.nodes.forEach(n=>{ (n.children||[]).forEach(c=>{ if(!c.children||!c.children.length){ c.children=L3T.map(t=>({title:t})); }}); }); persist(); renderTree(); toast('L3雛形を挿入'); };
+
+// ツリー⇄テキスト（番号式）
+$('#toText').onclick=()=>{ ensureTree(); const lines=[`0. ${state.tree.root||''}`]; state.tree.nodes.forEach((n,i)=>{ lines.push(`${i+1}. ${n.title}`); (n.children||[]).forEach((c,j)=>{ lines.push(`${i+1}.${j+1} ${c.title}`); (c.children||[]).forEach((g,k)=>{ lines.push(`${i+1}.${j+1}.${k+1} ${g.title}`); }); }); }); $('#treeText').value=lines.join('\n'); };
+$('#fromText').onclick=()=>{ const txt=$('#treeText').value.trim(); if(!txt) return toast('テキスト未入力'); const lines=txt.split(/\n+/).map(s=>s.trim()).filter(Boolean); const rootLine=lines.find(l=>/^0\./.test(l)); const root=rootLine?rootLine.replace(/^0\.\s*/,''):($('#rootIssue').value.trim()||''); const nodes=[]; lines.forEach(l=>{ const m=l.match(/^(\d+(?:\.\d+){0,2})\.?\s+(.*)$/); if(!m) return; const idx=m[1], title=m[2]; const parts=idx.split('.').map(n=>+n); if(parts.length===1 && parts[0]!==0){ const i=parts[0]-1; nodes[i]=nodes[i]||{title, children:[]}; nodes[i].title=title; } if(parts.length===2){ const [i1,i2]=parts; const i=i1-1,j=i2-1; nodes[i]=nodes[i]||{title:'', children:[]}; nodes[i].children=nodes[i].children||[]; nodes[i].children[j]=nodes[i].children[j]||{title, children:[]}; nodes[i].children[j].title=title; } if(parts.length===3){ const [i1,i2,i3]=parts; const i=i1-1,j=i2-1,k=i3-1; nodes[i]=nodes[i]||{title:'', children:[]}; nodes[i].children=nodes[i].children||[]; nodes[i].children[j]=nodes[i].children[j]||{title:'', children:[]}; nodes[i].children[j].children=nodes[i].children[j].children||[]; nodes[i].children[j].children[k]={title}; } }); state.tree={root, nodes:nodes.filter(Boolean).map(n=>({title:n.title, children:(n.children||[]).filter(Boolean).map(c=>({title:c.title, children:(c.children||[]).filter(Boolean)}))}))}; persist(); renderTree(); toast('テキストからツリーへ取り込み'); };
+
+// MECEプロンプト（3層対応）
+$('#mkMECE').onclick=()=>{ ensureTree(); const subs=state.tree.nodes.map(n=>n.title); if(!subs.length) return toast('サブイシューを入力'); const lines=state.tree.nodes.map((n,i)=>{ const l2=(n.children||[]).map((c,j)=>`  - ${i+1}.${j+1} ${c.title}`).join('\n'); return `${i+1}. ${n.title}\n${l2}`; }).join('\n'); $('#out').value=`【MECEチェック用プロンプト（3層）】\n次のイシューツリーの重複/漏れ/再配置/統合提案/優先度を返して。\n---\n0. ${state.tree.root}\n${lines}`; };
+
+// ====== Tests ======
+function runTests(){ const R=[]; const eq=(n,c)=>R.push(`${c?'✅':'❌'} ${n}`); try{ eq('AGENTSは6個', AGENTS.length===6); }catch(_){ eq('AGENTSは6個', false);} try{ const all=AGENTS.map(a=>a.build(['a','b','c','d'])).join('\n'); eq('buildが文字列', typeof all==='string'&&all.length>10);}catch(_){ eq('buildが文字列', false);} try{ state.tree={root:'R',nodes:[{title:'A',children:[{title:'a1',children:[{title:'a1-1'}]}]}]}; $('#toText').click(); const t=$('#treeText').value; eq('3階層テキスト出力', /1\.1\.1 a1-1/.test(t)); $('#fromText').click(); eq('テキスト→ツリー復元', (state.tree.root||'')==='R'); }catch(_){ eq('3階層テキスト/復元', false);} $('#testResults').textContent=R.join('\n'); }
+$('#runTests').onclick=runTests;
+
+// boot
+renderAgents(); ensureTree(); renderTree();
+</script>
+</body>
+</html>
